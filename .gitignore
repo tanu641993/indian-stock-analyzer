@@ -1,3 +1,10 @@
+# Before (BAD - this is ignoring your DB):
+# *.db
+# database/
+
+# After (GOOD - allow the database to be committed):
 __pycache__/
-*.db
+*.pyc
+.venv/
 .env
+.streamlit/secrets.toml

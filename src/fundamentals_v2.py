@@ -35,6 +35,8 @@ class FundamentalEngineV2:
                 moat_roce_10y INTEGER,   -- Consistent >20% for 10 years
                 -- Level 8: Risk / Misc
                 current_ratio REAL, interest_coverage REAL, operating_margin REAL,
+                is_market_leader INTEGER DEFAULT 0,
+                auditor_red_flag INTEGER DEFAULT 0,
                 updated_at TEXT DEFAULT CURRENT_TIMESTAMP
             )
         """)
