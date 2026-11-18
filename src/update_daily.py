@@ -30,7 +30,7 @@ if __name__ == "__main__":
     print("=" * 60)
     
     # Step 1: Update historical prices
-    #run_script("download_all_prices.py")
+    run_script("download_all_prices.py")
     
     # Step 2: Update deep fundamental data (5Y CAGR, FCF, ROCE trends, Market Cap)
     run_script("fundamentals_v2.py")
