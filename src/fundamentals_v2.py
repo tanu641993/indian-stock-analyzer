@@ -1,18 +1,15 @@
 # src/fundamentals_v2.py
-
 import sqlite3
 import pandas as pd
-import numpy as np
+import yfinance as yf
 import os
 import time
-from data_fetcher import DataFetcher # Import the new fetcher
 
 DB_PATH = os.path.join(os.path.dirname(__file__), "..", "database", "stocks.db")
 
 class FundamentalEngineV2:
     def __init__(self):
         self.conn = sqlite3.connect(DB_PATH)
-        self.fetcher = DataFetcher() # Initialize the fetcher
         self._create_table()
 
     def _create_table(self):
@@ -23,20 +20,13 @@ class FundamentalEngineV2:
                 company TEXT,
                 sector TEXT,
                 market_cap REAL,
-                -- Level 1: Financial Quality
                 roe REAL, roce REAL, debt_to_equity REAL, pe REAL, pb REAL,
-                -- Level 2: Business Quality (Growth)
                 rev_cagr_3y REAL, rev_cagr_5y REAL, profit_cagr_3y REAL, profit_cagr_5y REAL, eps_cagr_3y REAL, eps_cagr_5y REAL,
                 margin_expansion REAL,
-                -- Level 3: Capital Allocation
                 roce_increasing INTEGER, fcf_positive_5y INTEGER, cfo_to_profit REAL,
-                -- Level 5: Management
                 promoter_holding REAL, promoter_pledge REAL, share_dilution REAL,
-                -- Level 6: Moat
                 moat_roce_10y INTEGER,
-                -- Level 8: Risk / Misc
                 current_ratio REAL, interest_coverage REAL, operating_margin REAL,
-                -- Governance Flags
                 is_market_leader INTEGER DEFAULT 0,
                 auditor_red_flag INTEGER DEFAULT 0,
                 updated_at TEXT DEFAULT CURRENT_TIMESTAMP
@@ -51,73 +41,143 @@ class FundamentalEngineV2:
 
     def get_stock_data(self, symbol):
         try:
-            # 1. Fetch raw data using the multi-source fetcher
-            data = self.fetcher.fetch_fundamentals(symbol)
-            if not data:
-                return None
-
-            fin = data["financials"]
-            cf = data["cashflow"]
-            bs = data["balance_sheet"]
-            info = data.get("info", {})
-
-            # ... (The rest of your calculation logic from Week 4 remains the same)
-            # We extract metrics like ROE, ROCE, CAGR from the dataframes
+            ticker = yf.Ticker(f"{symbol}.NS")
+            info = ticker.info
             
-            # Example for Revenue CAGR
+            mcap = info.get("marketCap", 0) / 10000000
+            de = info.get("debtToEquity")
+            if de is not None and de > 5: de = de / 100
+            
+            fin = ticker.financials
+            cf = ticker.cashflow
+            bs = ticker.balance_sheet
+
             rev_cagr_3y, rev_cagr_5y = None, None
-            if not fin.empty and "Total Revenue" in fin.index:
-                rev_curr = fin.loc["Total Revenue"].iloc[0]
-                rev_3y = fin.loc["Total Revenue"].iloc[-3] if len(fin.columns) >= 3 else None
-                rev_5y = fin.loc["Total Revenue"].iloc[-5] if len(fin.columns) >= 5 else None
-                rev_cagr_3y = self._calc_cagr(rev_3y, rev_curr, 3)
-                rev_cagr_5y = self._calc_cagr(rev_5y, rev_curr, 5)
+            profit_cagr_3y, profit_cagr_5y = None, None
+            margin_expansion = None
+            roce_increasing = 0
+            fcf_positive_5y = 0
+            cfo_to_profit = None
+            moat_roce_10y = 0
+            roce_list = []
 
-            # ... (Calculate Profit CAGR, Margins, ROCE trends, FCF, etc.)
-            
-            # 2. Fetch Shareholding Pattern (using dalal)
-            shareholding_data = self.fetcher.fetch_shareholding(symbol)
-            promoter_holding = None
-            if shareholding_data and isinstance(shareholding_data, list) and len(shareholding_data) > 0:
-                # Extract promoter holding from the response structure
-                # (Structure varies, but typically shares are listed as percentages)
-                promoter_holding = shareholding_data[0].get('promoterHolding', 0) / 100 # Example conversion
+            if not fin.empty and len(fin.columns) >= 3:
+                try:
+                    # Revenue CAGR
+                    rev_curr = fin.loc["Total Revenue"].iloc[0]
+                    rev_3y = fin.loc["Total Revenue"].iloc[-3] if len(fin.columns) >= 3 else None
+                    rev_5y = fin.loc["Total Revenue"].iloc[-5] if len(fin.columns) >= 5 else None
+                    rev_cagr_3y = self._calc_cagr(rev_3y, rev_curr, 3)
+                    rev_cagr_5y = self._calc_cagr(rev_5y, rev_curr, 5)
+
+                    # Profit CAGR
+                    profit_curr = fin.loc["Net Income"].iloc[0]
+                    profit_3y = fin.loc["Net Income"].iloc[-3] if len(fin.columns) >= 3 else None
+                    profit_5y = fin.loc["Net Income"].iloc[-5] if len(fin.columns) >= 5 else None
+                    profit_cagr_3y = self._calc_cagr(profit_3y, profit_curr, 3)
+                    profit_cagr_5y = self._calc_cagr(profit_5y, profit_curr, 5)
+
+                    # Margin Expansion
+                    op_margin_curr = fin.loc["Operating Income"].iloc[0] / rev_curr if "Operating Income" in fin.index else None
+                    op_margin_5y = fin.loc["Operating Income"].iloc[-5] / rev_5y if "Operating Income" in fin.index and rev_5y else None
+                    if op_margin_curr and op_margin_5y:
+                        margin_expansion = op_margin_curr - op_margin_5y
+
+                    # ROCE Trend & Moat
+                    for col in fin.columns:
+                        ebit = fin.loc["EBIT", col] if "EBIT" in fin.index else None
+                        ta = bs.loc["Total Assets", col] if not bs.empty and "Total Assets" in bs.index else None
+                        cl = bs.loc["Current Liabilities", col] if not bs.empty and "Current Liabilities" in bs.index else None
+                        if ebit and ta and cl and (ta - cl) > 0:
+                            roce_list.append(ebit / (ta - cl))
+                    
+                    if len(roce_list) >= 3:
+                        roce_increasing = 1 if roce_list[0] > roce_list[-1] else 0
+                    
+                    if len(roce_list) >= 5 and all(r > 0.20 for r in roce_list):
+                        moat_roce_10y = 1
+
+                except Exception:
+                    pass
+
+            if not cf.empty:
+                try:
+                    fcf_list = cf.loc["Free Cash Flow"] if "Free Cash Flow" in cf.index else []
+                    if len(fcf_list) >= 3 and all(f > 0 for f in fcf_list):
+                        fcf_positive_5y = 1
+                        
+                    cfo_curr = cf.loc["Operating Cash Flow"].iloc[0] if "Operating Cash Flow" in cf.index else None
+                    net_profit = fin.loc["Net Income"].iloc[0] if not fin.empty and "Net Income" in fin.index else None
+                    if cfo_curr and net_profit and net_profit > 0:
+                        cfo_to_profit = cfo_curr / net_profit
+                except:
+                    pass
+
+            shares = info.get("sharesOutstanding", 1)
+            implied = info.get("impliedSharesOutstanding", 1)
+            dilution = (implied - shares) / shares if shares > 0 else 0
+            dilution = max(0, dilution)
 
             return {
-                "symbol": symbol,
-                "company": info.get("longName"),
-                "sector": info.get("sector", "Unknown"),
-                "market_cap": info.get("marketCap", 0) / 10000000,
-                "roe": info.get("returnOnEquity"),
-                "roce": None, # Calculate from fin/bs as done in previous versions
-                "debt_to_equity": info.get("debtToEquity"),
-                "pe": info.get("trailingPE"),
-                "pb": info.get("priceToBook"),
-                "rev_cagr_3y": rev_cagr_3y,
-                "rev_cagr_5y": rev_cagr_5y,
-                # ... (Include all other fields calculated from the statements)
-                "promoter_holding": promoter_holding,
-                # ... (Fill remaining fields)
+                "symbol": symbol, "company": info.get("longName"), "sector": info.get("sector", "Unknown"),
+                "market_cap": mcap,
+                "roe": info.get("returnOnEquity"), "roce": roce_list[0] if roce_list else None,
+                "debt_to_equity": de, "pe": info.get("trailingPE"), "pb": info.get("priceToBook"),
+                "rev_cagr_3y": rev_cagr_3y, "rev_cagr_5y": rev_cagr_5y,
+                "profit_cagr_3y": profit_cagr_3y, "profit_cagr_5y": profit_cagr_5y,
+                "eps_cagr_3y": profit_cagr_3y, "eps_cagr_5y": profit_cagr_5y,
+                "margin_expansion": margin_expansion,
+                "roce_increasing": roce_increasing, "fcf_positive_5y": fcf_positive_5y, "cfo_to_profit": cfo_to_profit,
+                "promoter_holding": info.get("heldPercentInsiders"), "promoter_pledge": 0.0, "share_dilution": dilution,
+                "moat_roce_10y": moat_roce_10y,
+                "current_ratio": info.get("currentRatio"), "interest_coverage": 100 if de == 0 else None, 
+                "operating_margin": info.get("operatingMargins")
             }
         except Exception as e:
-            print(f"Error processing {symbol}: {e}")
+            print(f"Error {symbol}: {e}")
             return None
 
     def update_all(self):
         df = pd.read_sql("SELECT symbol FROM stocks", self.conn)
         for i, row in df.iterrows():
             sym = row['symbol']
-            print(f"Fetching Deep Data for {sym}...")
+            
+            # --- INCREMENTAL CHECK ---
+            existing = pd.read_sql(f"SELECT updated_at FROM fundamentals WHERE symbol = '{sym}'", self.conn)
+            
+            if not existing.empty:
+                last_updated = pd.to_datetime(existing.iloc[0]['updated_at'])
+                days_since_update = (pd.Timestamp.now() - last_updated).days
+                
+                if days_since_update < 30:
+                    print(f"⏭️ {sym} fundamentals updated {days_since_update} days ago. Updating daily metrics only...")
+                    try:
+                        ticker = yf.Ticker(f"{sym}.NS")
+                        info = ticker.info
+                        mcap = info.get("marketCap", 0) / 10000000
+                        pe = info.get("trailingPE")
+                        
+                        self.conn.execute(
+                            "UPDATE fundamentals SET market_cap = ?, pe = ?, updated_at = CURRENT_TIMESTAMP WHERE symbol = ?",
+                            (mcap, pe, sym)
+                        )
+                        self.conn.commit()
+                    except Exception as e:
+                        print(f"Failed to update daily metrics for {sym}: {e}")
+                    continue 
+                    
+            print(f"📥 Fetching Full Deep Data for {sym}...")
             data = self.get_stock_data(sym)
             if data:
                 keys = data.keys()
                 query = f"INSERT OR REPLACE INTO fundamentals ({','.join(keys)}) VALUES ({','.join(['?']*len(keys))})"
                 self.conn.execute(query, list(data.values()))
                 self.conn.commit()
+            
             if (i + 1) % 5 == 0: time.sleep(1)
 
 if __name__ == "__main__":
     engine = FundamentalEngineV2()
     engine.update_all()
     engine.conn.close()
-    print("✅ Database fully updated with Level 1-10 metrics using multi-source data!")
+    print("✅ Database fully updated with Level 1-10 metrics!")
