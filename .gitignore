@@ -8,3 +8,6 @@ __pycache__/
 .venv/
 .env
 .streamlit/secrets.toml
+*.sqlite
+finance-cache*
+.cache
