@@ -9,7 +9,7 @@ from scoring import ScoringEngine
 
 DB_PATH = os.path.join(os.path.dirname(__file__), "..", "database", "stocks.db")
 ALERT_RULES = (
-    ("Master_Score", "master_score", 80, "Master Score"),
+    ("Master_Score", "master_score", 60, "Master Score"),
     ("Multibagger_Score", "multibagger_score", 90, "Multibagger Score"),
 )
 
@@ -38,7 +38,7 @@ def prepare_score_alerts(db_path, ranked_scores):
                     is_above = score >= threshold
                     previous = conn.execute(
                         """
-                        SELECT is_above
+                        SELECT score
                         FROM telegram_score_alert_state
                         WHERE symbol = ? AND alert_type = ?
                         """,
@@ -54,7 +54,7 @@ def prepare_score_alerts(db_path, ranked_scores):
                             """,
                             (symbol, alert_type, int(is_above), score),
                         )
-                    elif is_above and not previous[0]:
+                    elif is_above and previous[0] < threshold:
                         alert = alerts_by_symbol.setdefault(
                             symbol,
                             {"symbol": symbol, "company": company, "crossings": []},
@@ -79,16 +79,19 @@ def prepare_score_alerts(db_path, ranked_scores):
     return list(alerts_by_symbol.values())
 
 
-def mark_alert_delivered(db_path, symbol, alert_types):
+def mark_alert_delivered(db_path, symbol, crossings):
     with closing(sqlite3.connect(db_path)) as conn:
         with conn:
             conn.executemany(
                 """
                 UPDATE telegram_score_alert_state
-                SET is_above = 1, updated_at = CURRENT_TIMESTAMP
+                SET is_above = 1, score = ?, updated_at = CURRENT_TIMESTAMP
                 WHERE symbol = ? AND alert_type = ?
                 """,
-                [(symbol, alert_type) for alert_type in alert_types],
+                [
+                    (crossing["score"], symbol, crossing["alert_type"])
+                    for crossing in crossings
+                ],
             )
 
 
@@ -117,7 +120,7 @@ async def deliver_alerts(token, chat_id, db_path, alerts):
             mark_alert_delivered(
                 db_path,
                 alert["symbol"],
-                [crossing["alert_type"] for crossing in alert["crossings"]],
+                alert["crossings"],
             )
 
 

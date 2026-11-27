@@ -15,7 +15,7 @@ Use the sidebar pages as follows:
 - **Watchlist:** See recent stored price changes and configure price or P/E
   thresholds. These local thresholds are checked when the page loads.
 - **Telegram score alerts:** The scheduled GitHub Actions update can notify you
-  when a stock newly crosses a Master Score of 80 or a Multibagger Score of 90.
+  when a stock newly crosses a Master Score of 60 or a Multibagger Score of 90.
 - **Market Context:** Switch between sector summaries and commodity/currency
   benchmarks. Commodity prices are global Yahoo Finance indicators, not Indian
   MCX quotes.
@@ -85,11 +85,12 @@ bot token and your chat ID, then add them to the GitHub repository under
 **Settings → Secrets and variables → Actions** as `TELEGRAM_BOT_TOKEN` and
 `TELEGRAM_CHAT_ID`. Do not put either value in source code or commit them.
 The daily workflow sends a message only when a stock moves from below to at or
-above Master Score 80 or Multibagger Score 90. Its first run records current
+above Master Score 60 or Multibagger Score 90. Its first run records current
 scores as a baseline instead of sending a burst for stocks that already meet
-the thresholds. A later drop below and recross can alert again. If Telegram
-delivery fails, the workflow reports a warning and leaves that crossing
-eligible for a retry on the next run.
+the thresholds. Existing scores are also baselined if a threshold changes.
+A later drop below and recross can alert again. If Telegram delivery fails,
+the workflow reports a warning and leaves that crossing eligible for a retry
+on the next run.
 
 To test Telegram delivery from PowerShell without changing the database, run
 this from the repository folder. Enter the replacement bot token at the
