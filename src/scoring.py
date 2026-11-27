@@ -11,7 +11,7 @@ class ScoringEngine:
         self.conn.row_factory = sqlite3.Row
 
     def _safe(self, val, default=0):
-        return val if val is not None else default
+        return default if val is None or pd.isna(val) else val
 
     # 1. BUSINESS QUALITY (Max 25)
     def score_business_quality(self, row):
@@ -155,7 +155,22 @@ class ScoringEngine:
 
     def rank_all(self):
         df = pd.read_sql("SELECT * FROM fundamentals", self.conn)
-        
+        return self.rank_fundamentals(df)
+
+    def rank_fundamentals(self, df):
+        if df.empty:
+            return pd.DataFrame(
+                columns=[
+                    "Symbol",
+                    "Sector",
+                    "Master_Score",
+                    "Compounder_Score",
+                    "Growth_Score",
+                    "Value_Score",
+                    "Multibagger_Score",
+                ]
+            )
+
         # Calculate Sector Median PE
         sector_pe = df.groupby("sector")["pe"].median().to_dict()
         
@@ -176,7 +191,9 @@ class ScoringEngine:
             
         final_df = pd.DataFrame(results)
         final_df = final_df.loc[:, ~final_df.columns.duplicated()]
-        return final_df
+        return final_df.sort_values(
+            ["Master_Score", "Symbol"], ascending=[False, True]
+        ).reset_index(drop=True)
 
     def close(self):
         self.conn.close()

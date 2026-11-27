@@ -13,30 +13,34 @@ def run_script(script_name):
     print(f"⏳ Starting {script_name} at {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}...")
     
     try:
-        result = subprocess.run(
+        subprocess.run(
             [sys.executable, script_path], 
             check=True, 
             cwd=os.path.dirname(SRC_DIR)
         )
         print(f"✅ Finished {script_name}\n")
+        return True
     except subprocess.CalledProcessError as e:
         print(f"❌ Error in {script_name}: {e}\n")
+        return False
     except FileNotFoundError:
         print(f"❌ File not found: {script_path}\n")
+        return False
 
 if __name__ == "__main__":
     print("=" * 60)
     print("🚀 BEGINNING DAILY DATA UPDATE PIPELINE")
     print("=" * 60)
     
-    # Step 1: Update historical prices
-    run_script("download_all_prices.py")
-    
-    # Step 2: Update deep fundamental data (5Y CAGR, FCF, ROCE trends, Market Cap)
-    run_script("fundamentals_v2.py")
-    
-    # Step 3: Automatically calculate Market Leaders & Auditor Red Flags
-    run_script("automate_flags.py")
+    scripts = [
+        "download_all_prices.py",
+        "fundamentals_v2.py",
+        "automate_flags.py",
+        "snapshot_fundamentals.py",
+    ]
+    for script_name in scripts:
+        if not run_script(script_name):
+            sys.exit(1)
     
     print("=" * 60)
     print("🎉 DAILY UPDATE COMPLETE!")

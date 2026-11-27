@@ -11,3 +11,4 @@ __pycache__/
 *.sqlite
 finance-cache*
 .cache
+database/user_state.db*

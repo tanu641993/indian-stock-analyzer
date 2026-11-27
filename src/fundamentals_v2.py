@@ -4,6 +4,7 @@ import pandas as pd
 import yfinance as yf
 import os
 import time
+from datetime import datetime, timezone
 
 DB_PATH = os.path.join(os.path.dirname(__file__), "..", "database", "stocks.db")
 
@@ -29,15 +30,30 @@ class FundamentalEngineV2:
                 current_ratio REAL, interest_coverage REAL, operating_margin REAL,
                 is_market_leader INTEGER DEFAULT 0,
                 auditor_red_flag INTEGER DEFAULT 0,
-                updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+                updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                deep_updated_at TEXT
             )
         """)
+        existing_columns = {
+            column[1]
+            for column in cursor.execute("PRAGMA table_info(fundamentals)").fetchall()
+        }
+        if "deep_updated_at" not in existing_columns:
+            cursor.execute("ALTER TABLE fundamentals ADD COLUMN deep_updated_at TEXT")
         self.conn.commit()
 
     def _calc_cagr(self, start_val, end_val, years):
         if start_val is None or end_val is None or start_val <= 0 or end_val <= 0 or years <= 0:
             return None
         return (end_val / start_val) ** (1 / years) - 1
+
+    @staticmethod
+    def deep_data_refresh_due(last_updated, now=None):
+        timestamp = pd.to_datetime(last_updated, utc=True, errors="coerce")
+        if pd.isna(timestamp):
+            return True
+        now = now or pd.Timestamp.now(tz="UTC")
+        return (now - timestamp).days >= 30
 
     def get_stock_data(self, symbol):
         try:
@@ -120,6 +136,7 @@ class FundamentalEngineV2:
 
             return {
                 "symbol": symbol, "company": info.get("longName"), "sector": info.get("sector", "Unknown"),
+                "deep_updated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
                 "market_cap": mcap,
                 "roe": info.get("returnOnEquity"), "roce": roce_list[0] if roce_list else None,
                 "debt_to_equity": de, "pe": info.get("trailingPE"), "pb": info.get("priceToBook"),
@@ -143,14 +160,19 @@ class FundamentalEngineV2:
             sym = row['symbol']
             
             # --- INCREMENTAL CHECK ---
-            existing = pd.read_sql(f"SELECT updated_at FROM fundamentals WHERE symbol = '{sym}'", self.conn)
+            existing = pd.read_sql_query(
+                "SELECT deep_updated_at FROM fundamentals WHERE symbol = ?",
+                self.conn,
+                params=(sym,),
+            )
             
             if not existing.empty:
-                last_updated = pd.to_datetime(existing.iloc[0]['updated_at'])
-                days_since_update = (pd.Timestamp.now() - last_updated).days
-                
-                if days_since_update < 30:
-                    print(f"⏭️ {sym} fundamentals updated {days_since_update} days ago. Updating daily metrics only...")
+                last_deep_update = existing.iloc[0]["deep_updated_at"]
+                if not self.deep_data_refresh_due(last_deep_update):
+                    print(
+                        f"⏭️ {sym} deep fundamentals are still fresh. "
+                        "Updating daily metrics only..."
+                    )
                     try:
                         ticker = yf.Ticker(f"{sym}.NS")
                         info = ticker.info
