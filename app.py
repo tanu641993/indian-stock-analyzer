@@ -114,6 +114,118 @@ FUNDAMENTAL_STALE_DAYS = 7
 DEEP_FUNDAMENTAL_STALE_DAYS = 45
 
 st.set_page_config(page_title="StockIQ", page_icon="📈", layout="wide")
+st.markdown(
+    """
+    <style>
+    .block-container {
+        max-width: 1500px;
+        padding-top: 1.8rem;
+        padding-bottom: 3rem;
+    }
+
+    [data-testid="stAppViewContainer"] {
+        background: var(--background-color);
+    }
+
+    [data-testid="stSidebar"] {
+        border-right: 1px solid rgba(127, 144, 166, 0.25);
+    }
+
+    h1, h2, h3 {
+        letter-spacing: -0.02em;
+    }
+
+    h1 {
+        font-size: clamp(1.75rem, 3vw, 2.4rem);
+        font-weight: 700;
+    }
+
+    [data-testid="stMetric"] {
+        background: var(--secondary-background-color);
+        border: 1px solid rgba(127, 144, 166, 0.25);
+        border-radius: 12px;
+        padding: 1rem 1.1rem;
+        min-height: 100px;
+    }
+
+    [data-testid="stMetricLabel"] {
+        font-size: 0.9rem;
+        font-weight: 600;
+    }
+
+    [data-testid="stMetricValue"] {
+        font-size: 1.45rem;
+        font-weight: 700;
+    }
+
+    [data-testid="stTextInput"] input {
+        min-height: 44px;
+        border-radius: 9px;
+    }
+
+    [data-baseweb="select"] > div {
+        min-height: 42px;
+        border-radius: 9px;
+    }
+
+    div.stButton > button,
+    div.stDownloadButton > button {
+        min-height: 42px;
+        border-radius: 9px;
+        font-weight: 600;
+        transition: border-color 120ms ease, transform 120ms ease;
+    }
+
+    div.stButton > button:hover,
+    div.stDownloadButton > button:hover {
+        border-color: var(--primary-color);
+        transform: translateY(-1px);
+    }
+
+    button:focus-visible,
+    input:focus-visible,
+    [role="combobox"]:focus-visible {
+        outline: 3px solid var(--primary-color) !important;
+        outline-offset: 2px;
+    }
+
+    [data-testid="stExpander"],
+    [data-testid="stDataFrame"] {
+        border-radius: 10px;
+    }
+
+    [data-baseweb="tab-list"] {
+        gap: 0.35rem;
+    }
+
+    [role="tab"] {
+        min-height: 44px;
+        padding: 0.65rem 1rem;
+    }
+
+    @media (max-width: 700px) {
+        .block-container {
+            padding: 1rem 0.8rem 2rem;
+        }
+
+        [data-testid="stMetric"] {
+            min-height: 88px;
+            padding: 0.8rem;
+        }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+        *,
+        *::before,
+        *::after {
+            scroll-behavior: auto !important;
+            transition-duration: 0.01ms !important;
+        }
+    }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
 
 
 @st.cache_data(ttl=900)
@@ -274,13 +386,15 @@ def get_recent_news(symbol):
             published_at = pd.to_datetime(
                 published_value, utc=True, errors="coerce"
             )
+        if pd.notna(published_at):
+            published_at = published_at.tz_convert("Asia/Kolkata")
 
         normalized.append(
             {
                 "title": str(title).strip(),
                 "publisher": str(provider),
                 "published_at": (
-                    published_at.strftime("%Y-%m-%d %H:%M UTC")
+                    published_at.strftime("%Y-%m-%d %I:%M %p IST")
                     if pd.notna(published_at)
                     else "Date unavailable"
                 ),
@@ -424,10 +538,10 @@ def analyze_news_with_ollama(symbol, headlines, model):
 # 2. GLOBAL HELPER FUNCTIONS & SECTOR MAPPING
 # ---------------------------------------------------------
 def get_verdict(score):
-    if score >= 75: return "🟢 STRONG BUY (Long Term)"
-    elif score >= 60: return "🟡 BUY / HOLD"
-    elif score >= 45: return "🟠 WATCHLIST"
-    else: return "🔴 AVOID"
+    if score >= 75: return "Strong (75+)"
+    elif score >= 60: return "Buy / Hold (60+)"
+    elif score >= 45: return "Watchlist (45+)"
+    else: return "Avoid (<45)"
 
 def map_indian_sector(row):
     symbol = row['Symbol']
@@ -457,15 +571,16 @@ def map_indian_sector(row):
 # ---------------------------------------------------------
 # 3. SIDEBAR NAVIGATION
 # ---------------------------------------------------------
-st.sidebar.title("Navigation")
+st.sidebar.title("StockIQ")
+st.sidebar.caption("Indian stock research")
+st.sidebar.markdown("Navigation")
 page = st.sidebar.radio(
     "Go to:",
     [
-        "📈 Stock Screener",
-        "🏢 Sector Analysis",
-        "🪙 Commodity Dashboard",
-        "🔔 Watchlist & Alerts",
-        "📁 My Portfolio",
+        "Find Stocks",
+        "Watchlist",
+        "Market Context",
+        "Portfolio Preview",
     ],
 )
 
@@ -508,7 +623,22 @@ def get_data():
             """,
             conn,
         )
+        latest_prices = pd.read_sql_query(
+            """
+            SELECT symbol AS Symbol, close AS Latest_Price, date AS Price_Date
+            FROM (
+                SELECT symbol, close, date,
+                       ROW_NUMBER() OVER (
+                           PARTITION BY symbol ORDER BY date DESC
+                       ) AS row_number
+                FROM price_history
+            )
+            WHERE row_number = 1
+            """,
+            conn,
+        )
     df = df.merge(metrics, on="Symbol", how="left", validate="one_to_one")
+    df = df.merge(latest_prices, on="Symbol", how="left", validate="one_to_one")
     
     # Apply the custom mapping (row by row so it can read the Symbol)
     df["Indian_Sector"] = df.apply(map_indian_sector, axis=1)
@@ -521,104 +651,230 @@ except Exception as e:
     st.error(f"⚠️ Error loading database: {e}")
     st.stop()
 
-# =========================================================
-# PAGE 1: STOCK SCREENER
-# =========================================================
-if page == "📈 Stock Screener":
-    st.sidebar.markdown("---")
-    st.sidebar.header("🎯 Strategy Selection")
-    strategy = st.sidebar.radio("Choose Ranking Model:", ["Master Investment Score", "Compounder Rank", "Growth Rank", "Value Rank", "Potential Multibaggers"])
-
-    st.sidebar.header("🔍 Filter Options")
-    all_sectors = sorted(df["Indian_Sector"].dropna().unique().tolist())
-    selected_sectors = st.sidebar.multiselect("Select Sectors:", options=all_sectors, default=all_sectors)
-    min_score = st.sidebar.slider("Minimum Master Score:", min_value=0, max_value=100, value=45, step=5)
-    
-    all_verdicts = ["🟢 STRONG BUY (Long Term)", "🟡 BUY / HOLD", "🟠 WATCHLIST", "🔴 AVOID"]
-    selected_verdicts = st.sidebar.multiselect("Show Verdicts:", options=all_verdicts, default=all_verdicts)
-    search_query = st.sidebar.text_input(
-        "Search symbol or company",
-        placeholder="e.g. TCS or Tata",
+if page == "Market Context":
+    st.title("Market Context")
+    market_view = st.radio(
+        "Choose a view",
+        ["Sectors", "Commodities"],
+        horizontal=True,
     )
 
-    st.title(f"📈 {strategy}")
+# =========================================================
+# PAGE 1: FIND STOCKS
+if page == "Find Stocks":
+    st.title("Find Stocks")
+    st.caption(
+        "Search the stock list, then choose a company to understand its score and risks. "
+        "Scores are screening aids, not buy/sell advice."
+    )
 
-    score_col = {"Master Investment Score": "Master_Score", "Compounder Rank": "Compounder_Score", "Growth Rank": "Growth_Score", "Value Rank": "Value_Score", "Potential Multibaggers": "Multibagger_Score"}[strategy]
+    price_dates = pd.to_datetime(df["Price_Date"], errors="coerce")
+    newest_price_date = price_dates.max()
+    overview_metrics = st.columns(3)
+    overview_metrics[0].metric("Stocks covered", f"{df['Symbol'].nunique():,}")
+    overview_metrics[1].metric(
+        "With stored price data",
+        f"{int(df['Latest_Price'].notna().sum()):,}",
+    )
+    overview_metrics[2].metric(
+        "Newest stored close",
+        newest_price_date.strftime("%Y-%m-%d")
+        if pd.notna(newest_price_date)
+        else "Unavailable",
+    )
 
+    search_query = st.text_input(
+        "Search by company or symbol",
+        placeholder="For example: Tata or TCS",
+        key="stock_search",
+    )
+    all_sectors = sorted(df["Indian_Sector"].dropna().unique().tolist())
+    all_verdicts = [
+        "Strong (75+)",
+        "Buy / Hold (60+)",
+        "Watchlist (45+)",
+        "Avoid (<45)",
+    ]
+    strategies = [
+        "Master Investment Score",
+        "Compounder Rank",
+        "Growth Rank",
+        "Value Rank",
+        "Potential Multibaggers",
+    ]
+    with st.expander("More filters and ranking options"):
+        strategy = st.selectbox(
+            "Ranking model",
+            strategies,
+            help="Master Investment Score is the recommended starting point.",
+        )
+        selected_sectors = st.multiselect(
+            "Sectors",
+            options=all_sectors,
+            default=all_sectors,
+        )
+        min_score = st.slider(
+            "Minimum Master Score",
+            min_value=0,
+            max_value=100,
+            value=45,
+            step=5,
+        )
+        selected_verdicts = st.multiselect(
+            "App labels",
+            options=all_verdicts,
+            default=all_verdicts,
+        )
+    if strategy != "Master Investment Score":
+        st.caption(
+            "Alternative rankings use different score scales. The minimum-score "
+            "filter still applies to the Master Investment Score."
+        )
+
+    score_columns = {
+        "Master Investment Score": "Master_Score",
+        "Compounder Rank": "Compounder_Score",
+        "Growth Rank": "Growth_Score",
+        "Value Rank": "Value_Score",
+        "Potential Multibaggers": "Multibagger_Score",
+    }
+    score_col = score_columns[strategy]
     display_df = df.copy()
-    if selected_sectors: display_df = display_df[display_df["Indian_Sector"].isin(selected_sectors)]
-    else: display_df = display_df.iloc[0:0]
-
+    if selected_sectors:
+        display_df = display_df[display_df["Indian_Sector"].isin(selected_sectors)]
+    else:
+        display_df = display_df.iloc[0:0]
     display_df = display_df[display_df["Master_Score"] >= min_score]
-    
-    if selected_verdicts: display_df = display_df[display_df["Verdict"].isin(selected_verdicts)]
-    else: display_df = display_df.iloc[0:0]
-
+    if selected_verdicts:
+        display_df = display_df[display_df["Verdict"].isin(selected_verdicts)]
+    else:
+        display_df = display_df.iloc[0:0]
     if strategy == "Potential Multibaggers":
         display_df = display_df[display_df["Multibagger_Score"] > 0]
     if search_query.strip():
         query = search_query.strip()
         matches_symbol = display_df["Symbol"].str.contains(
-            query, case=False, na=False
+            query, case=False, na=False, regex=False
         )
         matches_company = display_df["Company"].str.contains(
-            query, case=False, na=False
+            query, case=False, na=False, regex=False
         )
         display_df = display_df.loc[matches_symbol | matches_company]
     display_df = display_df.sort_values(
         by=score_col, ascending=False
     ).reset_index(drop=True)
 
-    screener_tab, detail_tab = st.tabs(["Stock Screener", "Stock Detail"])
+    st.caption(f"Showing {len(display_df)} matching stocks, sorted by {strategy}.")
+    if display_df.empty:
+        st.info(
+            "No stocks match these filters. Try a broader search or lower the minimum score."
+        )
+    else:
+        table_columns = [
+            "Company",
+            "Symbol",
+            "Latest_Price",
+            "Price_Date",
+            "Master_Score",
+            "Verdict",
+            "Indian_Sector",
+        ]
+        table_df = display_df[table_columns].rename(
+            columns={
+                "Latest_Price": "Latest close (INR)",
+                "Price_Date": "Price date",
+                "Master_Score": "Master score",
+                "Verdict": "App label",
+                "Indian_Sector": "Sector",
+            }
+        )
+        table_df["Price date"] = (
+            table_df["Price date"].astype("string").str[:10].fillna("Unknown")
+        )
+        if strategy != "Master Investment Score":
+            table_df.insert(4, strategy, display_df[score_col].to_numpy())
+        st.dataframe(
+            table_df,
+            use_container_width=True,
+            hide_index=True,
+            column_config={
+                "Latest close (INR)": st.column_config.NumberColumn(format="%.2f"),
+                "Master score": st.column_config.NumberColumn(format="%.1f / 100"),
+            },
+        )
+        st.download_button(
+            "Download matching stocks (CSV)",
+            data=table_df.to_csv(index=False).encode("utf-8-sig"),
+            file_name="stock_screener_results.csv",
+            mime="text/csv",
+        )
 
-    with screener_tab:
-        st.subheader(strategy)
-        if display_df.empty:
-            st.warning("⚠️ No stocks match your current filters.")
-        else:
-            st.dataframe(display_df, use_container_width=True, hide_index=True)
-            st.download_button(
-                "Download screener results (CSV)",
-                data=display_df.to_csv(index=False).encode("utf-8-sig"),
-                file_name="stock_screener_results.csv",
-                mime="text/csv",
+        company_names = display_df.set_index("Symbol")["Company"].to_dict()
+        selected_symbol = st.selectbox(
+            "Choose a stock to view details",
+            options=display_df["Symbol"].tolist(),
+            format_func=lambda symbol: (
+                f"{symbol} - {company_names[symbol]}"
+                if pd.notna(company_names.get(symbol))
+                else symbol
+            ),
+            key="stock_detail_symbol",
+        )
+        selected_stock = display_df.loc[
+            display_df["Symbol"] == selected_symbol
+        ].iloc[0]
+        company_name = (
+            selected_stock["Company"]
+            if pd.notna(selected_stock["Company"])
+            else selected_symbol
+        )
+        st.header(f"{company_name} ({selected_symbol})")
+        overview_tab, chart_tab, peers_tab, financials_tab, news_tab = st.tabs(
+            ["Overview", "Price chart", "Peers", "Financials", "News"]
+        )
+
+        with overview_tab:
+            score_cols = st.columns(4)
+            latest_price = selected_stock["Latest_Price"]
+            score_cols[0].metric(
+                "Latest close",
+                (
+                    f"INR {latest_price:,.2f}"
+                    if pd.notna(latest_price)
+                    else "Unavailable"
+                ),
             )
-
-    with detail_tab:
-        if display_df.empty:
-            st.info("Adjust the screener filters to choose a stock.")
-        else:
-            selected_symbol = st.selectbox(
-                "Select a stock",
-                options=display_df["Symbol"].tolist(),
-                key="stock_detail_symbol",
+            score_cols[1].metric(
+                "Master score", f"{selected_stock['Master_Score']:.1f} / 100"
             )
-            selected_stock = display_df.loc[
-                display_df["Symbol"] == selected_symbol
-            ].iloc[0]
-            st.subheader(f"{selected_symbol} — Price and Trend")
-
-            score_col1, score_col2, score_col3 = st.columns(3)
-            score_col1.metric(
-                "Master Score", f"{selected_stock['Master_Score']:.1f} / 100"
-            )
-            score_col2.metric("Verdict", selected_stock["Verdict"])
-            score_col3.metric("Sector", selected_stock["Indian_Sector"])
-
-            st.subheader("Data freshness and coverage")
+            score_cols[2].metric("App label", selected_stock["Verdict"])
+            score_cols[3].metric("Sector", selected_stock["Indian_Sector"])
             st.caption(
-                "Fundamentals are sourced from Yahoo Finance via yfinance. "
-                "Market-cap and valuation refresh time is separate from the "
-                "last full financial-data refresh."
+                "Price is the latest close stored in the database, dated "
+                f"{str(selected_stock['Price_Date'])[:10] if pd.notna(selected_stock['Price_Date']) else 'unknown'}."
             )
+            st.caption(
+                "This score is a screening aid based on stored company data, not a forecast or a promise of returns."
+            )
+
+            if st.button("Add to Watchlist", key="add_detail_to_watchlist"):
+                watchlist_symbols = set(
+                    get_watchlist_entries(USER_STATE_DB_PATH)["symbol"]
+                )
+                if selected_symbol in watchlist_symbols:
+                    st.info("This stock is already in your watchlist.")
+                else:
+                    add_watchlist_symbol(USER_STATE_DB_PATH, selected_symbol)
+                    st.success("Added to your watchlist.")
+
             quality_fields = {
                 "ROE": "ROE",
                 "ROCE": "ROCE",
                 "P/E": "PE",
                 "P/B": "PB",
                 "Debt / equity": "Debt_to_Equity",
-                "Revenue CAGR (3Y)": "Revenue_CAGR_3Y",
-                "Profit CAGR (3Y)": "Profit_CAGR_3Y",
+                "Revenue growth": "Revenue_CAGR_3Y",
+                "Profit growth": "Profit_CAGR_3Y",
                 "Cash flow / profit": "CFO_to_Profit",
                 "Promoter holding": "Promoter_Holding",
                 "Current ratio": "Current_Ratio",
@@ -630,142 +886,121 @@ if page == "📈 Stock Screener":
                 for label, column in quality_fields.items()
                 if pd.isna(selected_stock[column])
             ]
-            freshness_cols = st.columns(3)
-            freshness_cols[0].metric(
-                "Key fields available",
-                f"{len(quality_fields) - len(missing_fields)}/{len(quality_fields)}",
-            )
             market_updated_at = selected_stock["Fundamental_Updated_At"]
-            freshness_cols[1].metric(
-                "Market / valuation refresh",
-                (
-                    str(market_updated_at)
-                    if pd.notna(market_updated_at)
-                    else "Unknown"
-                ),
-            )
             deep_updated_at = selected_stock["Deep_Fundamental_Updated_At"]
-            freshness_cols[2].metric(
-                "Full fundamentals refresh",
-                str(deep_updated_at) if pd.notna(deep_updated_at) else "Unknown",
-            )
-
             market_data_age = age_in_days(market_updated_at)
-            if market_data_age is None:
-                st.warning("The market/valuation refresh time is unavailable.")
-            elif market_data_age > FUNDAMENTAL_STALE_DAYS:
-                st.warning(
-                    f"Market/valuation data is {market_data_age} days old "
-                    f"(stale threshold: {FUNDAMENTAL_STALE_DAYS} days)."
-                )
             deep_data_age = age_in_days(deep_updated_at)
+            data_issues = []
+            if market_data_age is None:
+                data_issues.append("the latest valuation update date is unavailable")
+            elif market_data_age > FUNDAMENTAL_STALE_DAYS:
+                data_issues.append("valuation data is old")
             if deep_data_age is None:
-                st.warning(
-                    "The full financial-data refresh time is unknown. The "
-                    "existing database does not record this separately yet."
-                )
+                data_issues.append("the full financial-data update date is unknown")
             elif deep_data_age > DEEP_FUNDAMENTAL_STALE_DAYS:
-                st.warning(
-                    f"Full financial data is {deep_data_age} days old "
-                    f"(stale threshold: {DEEP_FUNDAMENTAL_STALE_DAYS} days)."
-                )
+                data_issues.append("full financial data may be old")
             if missing_fields:
-                st.warning("Missing key fields: " + ", ".join(missing_fields))
+                data_issues.append("some key figures are missing")
 
-            with st.expander("How to interpret this score and its risks"):
-                st.write(
-                    "The Master Score combines business quality, growth, financial "
-                    "strength, valuation, capital allocation, governance, moat and "
-                    "risk checks. It is a screening heuristic, not a forecast or "
-                    "probability of investment success. Missing inputs can affect "
-                    "the result."
+            st.subheader("Data check")
+            st.caption(
+                f"Key figures available: {len(quality_fields) - len(missing_fields)} of {len(quality_fields)} | "
+                f"Valuation updated: {str(market_updated_at)[:10] if pd.notna(market_updated_at) else 'unknown'} | "
+                f"Full financials updated: {str(deep_updated_at)[:10] if pd.notna(deep_updated_at) else 'unknown'}"
+            )
+            st.caption(
+                "Freshness guide: valuation data is considered current for 7 days; "
+                "full financial data for 45 days."
+            )
+            if data_issues:
+                st.warning(
+                    "Needs a closer look: " + "; ".join(data_issues) + ". "
+                    "Check the update dates and missing figures before relying on the score."
                 )
-                risk_signals = []
-                if (
-                    pd.notna(selected_stock["Debt_to_Equity"])
-                    and selected_stock["Debt_to_Equity"] > 1
-                ):
-                    risk_signals.append(
-                        "Debt-to-equity is above 1.0; leverage reduces the score."
-                    )
-                if (
-                    pd.notna(selected_stock["CFO_to_Profit"])
-                    and selected_stock["CFO_to_Profit"] < 0.5
-                ):
-                    risk_signals.append(
-                        "Operating cash flow is below half of net profit."
-                    )
-                if (
-                    pd.notna(selected_stock["Promoter_Pledge"])
-                    and selected_stock["Promoter_Pledge"] > 0.10
-                ):
-                    risk_signals.append(
-                        "Promoter pledge is above 10%, which triggers a governance penalty."
-                    )
-                if (
-                    pd.notna(selected_stock["Share_Dilution"])
-                    and selected_stock["Share_Dilution"] > 0.05
-                ):
-                    risk_signals.append(
-                        "Estimated share dilution is above 5%, which reduces the score."
-                    )
-                if selected_stock["FCF_Positive_5Y"] != 1:
-                    risk_signals.append(
-                        "The five-year positive free-cash-flow check was not met "
-                        "or the data is incomplete."
-                    )
-                if risk_signals:
-                    st.markdown("\n".join(f"- {signal}" for signal in risk_signals))
-                else:
-                    st.info(
-                        "No listed risk threshold was triggered. This does not "
-                        "mean the stock is risk-free."
-                    )
+            else:
+                st.success("Key figures are present and the saved update dates are recent.")
+            if missing_fields:
+                st.caption("Missing figures: " + ", ".join(missing_fields))
 
+            st.subheader("Why this score?")
+            strengths = []
+            risks = []
+            if pd.notna(selected_stock["ROCE"]) and selected_stock["ROCE"] > 0.20:
+                strengths.append(
+                    "The company earns strong returns on the money invested in its business."
+                )
+            if (
+                pd.notna(selected_stock["Revenue_CAGR_3Y"])
+                and selected_stock["Revenue_CAGR_3Y"] > 0.15
+            ):
+                strengths.append("Sales have grown strongly over the last three years.")
+            if (
+                pd.notna(selected_stock["Profit_CAGR_3Y"])
+                and selected_stock["Profit_CAGR_3Y"] > 0.15
+            ):
+                strengths.append("Reported profit has grown strongly over the last three years.")
+            if pd.notna(selected_stock["CFO_to_Profit"]) and selected_stock["CFO_to_Profit"] > 0.9:
+                strengths.append(
+                    "Cash coming into the business broadly supports its reported profit."
+                )
+            if selected_stock["FCF_Positive_5Y"] == 1:
+                strengths.append("Free cash flow was positive in the five-year check.")
+            if pd.notna(selected_stock["Debt_to_Equity"]):
+                if selected_stock["Debt_to_Equity"] > 1:
+                    risks.append("Debt is high relative to equity and reduces the score.")
+                elif selected_stock["Debt_to_Equity"] < 0.5:
+                    strengths.append("Debt is relatively low compared with equity.")
+            sector_peers = pd.to_numeric(
+                df.loc[df["Sector"] == selected_stock["Sector"], "PE"],
+                errors="coerce",
+            )
+            sector_peers = sector_peers[sector_peers > 0]
+            selected_pe = selected_stock["PE"]
+            if pd.notna(selected_pe) and selected_pe > 0 and not sector_peers.empty:
+                sector_median_pe = sector_peers.median()
+                if selected_pe < sector_median_pe:
+                    strengths.append("Its P/E is below the positive-P/E median for its sector.")
+                elif selected_pe > sector_median_pe * 1.5:
+                    risks.append("Its P/E is well above the positive-P/E median for its sector.")
+            if pd.notna(selected_stock["CFO_to_Profit"]) and selected_stock["CFO_to_Profit"] < 0.5:
+                risks.append(
+                    "Cash flow is much lower than reported profit; investigate earnings quality."
+                )
+            if pd.notna(selected_stock["Promoter_Pledge"]) and selected_stock["Promoter_Pledge"] > 0.10:
+                risks.append(
+                    "More than 10% of promoter-held shares are pledged, a governance risk to check."
+                )
+            if pd.notna(selected_stock["Share_Dilution"]) and selected_stock["Share_Dilution"] > 0.05:
+                risks.append(
+                    "Share count has increased materially, which can dilute existing shareholders."
+                )
+            if selected_stock["FCF_Positive_5Y"] != 1:
+                risks.append("The five-year free-cash-flow check was not met or its data is incomplete.")
+            if strengths:
+                st.markdown("**Positive signals**\n\n" + "\n".join(f"- {item}" for item in strengths))
+            if risks:
+                st.markdown("**Things to check**\n\n" + "\n".join(f"- {item}" for item in risks))
+            if not strengths and not risks:
+                st.info(
+                    "There is not enough stored information to explain the main score drivers."
+                )
             if selected_stock["Auditor_Red_Flag"] == 1:
-                cfo_to_profit = selected_stock["CFO_to_Profit"]
-                if pd.notna(cfo_to_profit) and cfo_to_profit < 0.5:
-                    st.error(
-                        "⚠️ Forensic Alert: Cash flow is significantly lower than "
-                        "net profit, indicating potential earnings manipulation."
-                    )
-                else:
-                    st.error(
-                        "⚠️ Forensic Alert: Auditor red-flag checks indicate "
-                        "potential earnings-quality concerns."
-                    )
-
-                triggered_signals = []
-                if pd.notna(cfo_to_profit) and cfo_to_profit < 0.5:
-                    triggered_signals.append(
-                        "Operating cash flow is less than 50% of net profit."
-                    )
-                if (
-                    pd.notna(selected_stock["Debt_to_Equity"])
-                    and selected_stock["Debt_to_Equity"] > 2.0
-                ):
-                    triggered_signals.append("Debt-to-equity is above 2.0.")
-                if (
-                    selected_stock["FCF_Positive_5Y"] == 0
-                    and pd.notna(selected_stock["ROCE"])
-                ):
-                    triggered_signals.append(
-                        "The positive free-cash-flow check was not met; data may be incomplete."
-                    )
-
-                if triggered_signals:
-                    st.markdown(
-                        "**Triggered checks:**\n\n"
-                        + "\n".join(f"- {signal}" for signal in triggered_signals)
-                    )
-                st.caption(
-                    "This is a heuristic alert based on stored financial checks, "
-                    "not proof of manipulation."
+                st.error(
+                    "Forensic warning: stored checks flagged possible earnings-quality concerns. "
+                    "This is a prompt to investigate, not proof of manipulation."
                 )
+            with st.expander("What goes into the score?"):
+                st.write(
+                    "Business quality (25 points), growth (20), financial strength (15), "
+                    "valuation (10), cash allocation (10), governance (10), business moat (5), "
+                    "and a risk score (5). Missing information can lower or distort a result."
+                )
+                st.caption("The app label is a rule-based screen, not personalized financial advice.")
 
+        with chart_tab:
             price_history = get_stock_price_history(selected_symbol)
             if price_history.empty:
-                st.warning(f"No price history is available for {selected_symbol}.")
+                st.info("No stored price history is available for this stock.")
             else:
                 figure = go.Figure()
                 figure.add_trace(
@@ -785,7 +1020,7 @@ if page == "📈 Stock Screener":
                         x=price_history["date"],
                         y=price_history["50 DMA"],
                         mode="lines",
-                        name="50 DMA",
+                        name="50-day average",
                         line=dict(color="#f39c12", width=1.5),
                     )
                 )
@@ -794,33 +1029,26 @@ if page == "📈 Stock Screener":
                         x=price_history["date"],
                         y=price_history["200 DMA"],
                         mode="lines",
-                        name="200 DMA",
+                        name="200-day average",
                         line=dict(color="#3498db", width=1.5),
                     )
                 )
                 figure.update_layout(
-                    title=f"{selected_symbol} — All-Time Price History",
+                    title=f"{selected_symbol} - All stored price history",
                     xaxis_title="Date",
                     yaxis_title="Price (INR)",
                     xaxis_rangeslider_visible=True,
                     hovermode="x unified",
-                    legend=dict(
-                        orientation="h",
-                        yanchor="bottom",
-                        y=1.02,
-                        xanchor="right",
-                        x=1,
-                    ),
-                    margin=dict(t=70, r=20, b=20, l=20),
                 )
                 st.plotly_chart(figure, use_container_width=True)
+                st.caption("The chart shows only the history stored for this stock in your database.")
                 if not price_history["200 DMA"].notna().any():
-                    st.info("The 200 DMA is unavailable because fewer than 200 trading sessions are stored.")
+                    st.info("The 200-day average needs at least 200 trading sessions of data.")
 
-            st.markdown("### Peer Comparison")
+        with peers_tab:
             peer_sector = selected_stock["Sector"]
             if pd.isna(peer_sector) or not str(peer_sector).strip():
-                st.info("Sector information is unavailable for this stock.")
+                st.info("Sector data is not available for this stock.")
             else:
                 sector_peers = df.loc[df["Sector"] == peer_sector].copy()
                 selected_peer = sector_peers.loc[
@@ -836,18 +1064,14 @@ if page == "📈 Stock Screener":
                     .drop_duplicates("Symbol")
                     .sort_values("Master_Score", ascending=False)
                 )
-
                 if len(peer_data) < 2:
-                    st.info(f"No other stocks were found in the {peer_sector} sector.")
+                    st.info(f"No other stored peers were found in {peer_sector}.")
                 else:
                     peer_metrics = peer_data[
                         ["PE", "ROE", "Debt_to_Equity"]
                     ].apply(pd.to_numeric, errors="coerce")
                     peer_metrics.loc[peer_metrics["PE"] <= 0, "PE"] = float("nan")
-                    peer_metrics.loc[
-                        peer_metrics["Debt_to_Equity"] < 0, "Debt_to_Equity"
-                    ] = float("nan")
-
+                    peer_metrics.loc[peer_metrics["Debt_to_Equity"] < 0, "Debt_to_Equity"] = float("nan")
                     heatmap_columns = {
                         "P/E": ("PE", False),
                         "ROE": ("ROE", True),
@@ -864,17 +1088,13 @@ if page == "📈 Stock Screener":
                         else:
                             ranks = pd.Series(float("nan"), index=values.index)
                         relative_ranks[label] = ranks.where(values.notna())
-
                     cell_text = []
                     for _, row in peer_metrics.iterrows():
                         cell_text.append([
-                            "N/A" if pd.isna(row["PE"]) else f"{row['PE']:.1f}x",
-                            "N/A" if pd.isna(row["ROE"]) else f"{row['ROE']:.1%}",
-                            "N/A"
-                            if pd.isna(row["Debt_to_Equity"])
-                            else f"{row['Debt_to_Equity']:.2f}x",
+                            "Missing" if pd.isna(row["PE"]) else f"{row['PE']:.1f}x",
+                            "Missing" if pd.isna(row["ROE"]) else f"{row['ROE']:.1%}",
+                            "Missing" if pd.isna(row["Debt_to_Equity"]) else f"{row['Debt_to_Equity']:.2f}x",
                         ])
-
                     peer_figure = go.Figure(
                         go.Heatmap(
                             x=list(heatmap_columns),
@@ -882,129 +1102,169 @@ if page == "📈 Stock Screener":
                             z=pd.DataFrame(relative_ranks).to_numpy().tolist(),
                             text=cell_text,
                             texttemplate="%{text}",
-                            textfont={"size": 12},
                             colorscale="RdYlGn",
                             zmin=0,
                             zmax=1,
-                            colorbar=dict(
-                                title="Relative rank",
-                                tickformat=".0%",
-                            ),
-                            hovertemplate=(
-                                "%{y}<br>%{x}: %{text}"
-                                "<br>Relative rank: %{z:.0%}<extra></extra>"
-                            ),
+                            colorbar=dict(title="Relative rank", tickformat=".0%"),
+                            hovertemplate="%{y}<br>%{x}: %{text}<br>Relative rank: %{z:.0%}<extra></extra>",
                             hoverongaps=False,
                         )
                     )
                     peer_figure.update_layout(
-                        title=f"Top Peers in {peer_sector}",
+                        title=f"{selected_symbol} and peers in {peer_sector}",
                         xaxis_title="Metric",
                         yaxis_title="Stock",
                         height=max(300, len(peer_data) * 70 + 120),
-                        margin=dict(t=60, r=20, b=20, l=20),
-                    )
-                    st.caption(
-                        "Selected stock plus up to four peers ranked by Master Score. "
-                        "Heatmap colors rank metrics within this group: green is "
-                        "relatively favorable (lower P/E and debt, higher ROE). "
-                        "Cells show the reported values."
                     )
                     st.plotly_chart(peer_figure, use_container_width=True)
+                    st.caption("Green means relatively favorable within this group: lower P/E and debt, or higher ROE. This is a comparison, not a buy signal.")
 
-            st.markdown("### AI News Sentiment (Local Ollama)")
-            try:
-                headlines = get_recent_news(selected_symbol)
-            except YFException as exc:
-                st.error(f"Could not retrieve Yahoo Finance news: {exc}")
-            else:
-                if not headlines:
-                    st.info(f"No recent news headlines were found for {selected_symbol}.")
+        with financials_tab:
+            st.caption("Fundamental figures are sourced from Yahoo Finance through the data updater. Missing values are shown explicitly.")
+            financial_rows = []
+            for label, column, style in (
+                ("ROE", "ROE", "percent"),
+                ("ROCE", "ROCE", "percent"),
+                ("P/E", "PE", "multiple"),
+                ("P/B", "PB", "multiple"),
+                ("Debt / equity", "Debt_to_Equity", "multiple"),
+                ("Revenue growth (3Y)", "Revenue_CAGR_3Y", "percent"),
+                ("Profit growth (3Y)", "Profit_CAGR_3Y", "percent"),
+                ("Cash flow / profit", "CFO_to_Profit", "multiple"),
+                ("Promoter holding", "Promoter_Holding", "percent"),
+                ("Promoter pledge", "Promoter_Pledge", "percent"),
+                ("Current ratio", "Current_Ratio", "multiple"),
+                ("Interest coverage", "Interest_Coverage", "multiple"),
+                ("Operating margin", "Operating_Margin", "percent"),
+            ):
+                value = selected_stock[column]
+                if pd.isna(value):
+                    formatted_value = "Missing"
+                elif style == "percent":
+                    formatted_value = f"{value:.1%}"
                 else:
-                    with st.expander("Recent headlines", expanded=True):
-                        for headline in headlines:
-                            st.markdown(
-                                f"**{headline['publisher']} · {headline['published_at']}**"
-                            )
-                            st.write(headline["title"])
+                    formatted_value = f"{value:.2f}x"
+                financial_rows.append({"Figure": label, "Value": formatted_value})
+            fcf_value = selected_stock["FCF_Positive_5Y"]
+            if pd.isna(fcf_value):
+                fcf_label = "Missing"
+            else:
+                fcf_label = "Yes" if fcf_value == 1 else "No"
+            auditor_flag = selected_stock["Auditor_Red_Flag"]
+            if pd.isna(auditor_flag):
+                auditor_label = "Unknown"
+            else:
+                auditor_label = "Flagged" if auditor_flag == 1 else "Not flagged"
+            financial_rows.extend([
+                {
+                    "Figure": "Positive free cash flow (5Y)",
+                    "Value": fcf_label,
+                },
+                {
+                    "Figure": "Auditor risk check",
+                    "Value": auditor_label,
+                },
+            ])
+            st.dataframe(pd.DataFrame(financial_rows), hide_index=True, use_container_width=True)
+            st.caption("These ratios need business and sector context. Compare peers and check company filings before relying on them.")
 
-                    try:
-                        models = get_installed_ollama_models()
-                    except RuntimeError as exc:
-                        st.error(f"Could not inspect local Ollama models: {exc}")
+        with news_tab:
+            st.caption(
+                "Headlines use India Standard Time (IST). Loading them is separate "
+                "from asking AI to interpret them."
+            )
+            headlines_key = f"news_headlines_{selected_symbol}"
+            button_label = (
+                "Refresh headlines"
+                if headlines_key in st.session_state
+                else "Load recent headlines"
+            )
+            if st.button(button_label, key=f"load_news_{selected_symbol}"):
+                st.session_state.pop(headlines_key, None)
+                try:
+                    with st.spinner("Loading recent headlines..."):
+                        st.session_state[headlines_key] = get_recent_news(
+                            selected_symbol
+                        )
+                except YFException as exc:
+                    st.error(f"Could not retrieve headlines: {exc}")
+
+            headlines = st.session_state.get(headlines_key)
+            if headlines is None:
+                st.info("Select “Load recent headlines” to see news for this stock.")
+            elif not headlines:
+                st.info("No recent headlines were found for this stock.")
+            else:
+                for headline in headlines:
+                    st.markdown(
+                        f"**{headline['publisher']} | {headline['published_at']}**"
+                    )
+                    st.write(headline["title"])
+                try:
+                    models = get_installed_ollama_models()
+                except RuntimeError as exc:
+                    st.warning(f"Local Ollama is unavailable: {exc}")
+                else:
+                    if not models:
+                        st.info(
+                            "No local AI model is installed. To enable sentiment, "
+                            "install Ollama and run `ollama pull llama3.2`."
+                        )
                     else:
-                        if not models:
-                            st.info(
-                                "No Ollama models are installed. Install a model, "
-                                "for example with `ollama pull llama3.2`, then rerun "
-                                "the app."
+                        selected_model = st.selectbox(
+                            "Local model",
+                            models,
+                            key=f"ollama_model_{selected_symbol}",
+                        )
+                        st.caption(
+                            "AI classifies these headlines only; it is not investment advice."
+                        )
+                        headline_signature = tuple(
+                            item["title"] for item in headlines
+                        )
+                        sentiment_key = f"news_sentiment_{selected_symbol}"
+                        stored_sentiment = st.session_state.get(sentiment_key)
+                        if stored_sentiment and (
+                            stored_sentiment.get("headlines") != headline_signature
+                            or stored_sentiment.get("model") != selected_model
+                        ):
+                            del st.session_state[sentiment_key]
+                            stored_sentiment = None
+                        if st.button(
+                            "Analyze these headlines",
+                            key=f"analyze_news_{selected_symbol}",
+                        ):
+                            try:
+                                with st.spinner(f"Analyzing with {selected_model}..."):
+                                    analysis = analyze_news_with_ollama(
+                                        selected_symbol, headlines, selected_model
+                                    )
+                            except (RuntimeError, ValueError) as exc:
+                                st.error(f"Sentiment analysis failed: {exc}")
+                            else:
+                                stored_sentiment = {
+                                    "headlines": headline_signature,
+                                    "model": selected_model,
+                                    "analysis": analysis,
+                                }
+                                st.session_state[sentiment_key] = stored_sentiment
+                        if stored_sentiment:
+                            result = stored_sentiment["analysis"]
+                            message = (
+                                f"**{result['sentiment']}** - {result['summary']}"
                             )
-                        else:
-                            selected_model = st.selectbox(
-                                "Installed local Ollama model",
-                                models,
-                                key=f"ollama_model_{selected_symbol}",
-                            )
-                            st.caption(
-                                f"Sentiment runs locally with `{selected_model}`. "
-                                "This is headline sentiment, not investment advice."
-                            )
+                            if result["sentiment"] == "Bullish":
+                                st.success(message)
+                            elif result["sentiment"] == "Bearish":
+                                st.warning(message)
+                            else:
+                                st.info(message)
 
-                            headline_signature = tuple(
-                                headline["title"] for headline in headlines
-                            )
-                            sentiment_key = f"news_sentiment_{selected_symbol}"
-                            stored_sentiment = st.session_state.get(sentiment_key)
-                            if stored_sentiment and (
-                                stored_sentiment.get("headlines")
-                                != headline_signature
-                                or stored_sentiment.get("model") != selected_model
-                            ):
-                                del st.session_state[sentiment_key]
-                                stored_sentiment = None
-
-                            if st.button(
-                                "Analyze headlines with Ollama",
-                                key=f"analyze_news_{selected_symbol}",
-                            ):
-                                try:
-                                    with st.spinner(
-                                        f"Analyzing headlines with {selected_model}..."
-                                    ):
-                                        analysis = analyze_news_with_ollama(
-                                            selected_symbol,
-                                            headlines,
-                                            selected_model,
-                                        )
-                                except (RuntimeError, ValueError) as exc:
-                                    st.error(f"Local sentiment analysis failed: {exc}")
-                                else:
-                                    stored_sentiment = {
-                                        "headlines": headline_signature,
-                                        "model": selected_model,
-                                        "analysis": analysis,
-                                    }
-                                    st.session_state[sentiment_key] = stored_sentiment
-
-                            if stored_sentiment:
-                                analysis = stored_sentiment["analysis"]
-                                sentiment_message = (
-                                    f"**{analysis['sentiment']}** — "
-                                    f"{analysis['summary']}"
-                                )
-                                if analysis["sentiment"] == "Bullish":
-                                    st.success(sentiment_message)
-                                elif analysis["sentiment"] == "Bearish":
-                                    st.warning(sentiment_message)
-                                else:
-                                    st.info(sentiment_message)
-
+# MARKET CONTEXT: SECTORS
 # =========================================================
-# PAGE 2: SECTOR ANALYSIS
-# =========================================================
-elif page == "🏢 Sector Analysis":
-    st.title("🏢 Indian Sector Analysis")
-    st.markdown("Explore the best long-term stocks grouped by specific Indian market sectors.")
+elif page == "Market Context" and market_view == "Sectors":
+    st.subheader("Sector overview")
+    st.caption("Compare scores across sectors. A high score is a screening signal, not a recommendation.")
 
     sectors = sorted(df["Indian_Sector"].unique().tolist())
     selected_sector = st.selectbox("Select a Sector to Analyze:", sectors)
@@ -1014,12 +1274,15 @@ elif page == "🏢 Sector Analysis":
         sector_df = sector_df.sort_values(by="Master_Score", ascending=False)
         
         # --- TOP 3 LONG-TERM BUYS SECTION ---
-        st.markdown(f"### 🏆 Top 3 Long-Term Buys in {selected_sector}")
+        st.markdown(f"### Highest-scoring stocks in {selected_sector}")
         
         top_buys = sector_df[sector_df["Master_Score"] >= 60].head(3)
         
         if top_buys.empty:
-            st.warning(f"⚠️ No strong 'Buy' recommendations in {selected_sector} right now. The top stocks in this sector are currently scoring below 60.")
+            st.warning(
+                f"No stock in {selected_sector} currently reaches the 60-point "
+                "threshold; showing the top three by score instead."
+            )
             top_buys = sector_df.head(3)
         else:
             cols = st.columns(3)
@@ -1080,10 +1343,10 @@ elif page == "🏢 Sector Analysis":
         )
 
 # =========================================================
-# PAGE 3: COMMODITY DASHBOARD
+# MARKET CONTEXT: COMMODITIES
 # =========================================================
-elif page == "🪙 Commodity Dashboard":
-    st.title("🪙 Commodity Dashboard")
+elif page == "Market Context" and market_view == "Commodities":
+    st.subheader("Commodity and currency context")
     st.markdown(
         "Track global commodity benchmarks that can influence Indian companies, "
         "and compare their recent price and volatility trends."
@@ -1285,10 +1548,10 @@ elif page == "🪙 Commodity Dashboard":
         )
 
 # =========================================================
-# PAGE 4: WATCHLIST AND ALERTS
+# PAGE 2: WATCHLIST
 # =========================================================
-elif page == "🔔 Watchlist & Alerts":
-    st.title("🔔 Watchlist & Alerts")
+elif page == "Watchlist":
+    st.title("Watchlist")
     info_col, refresh_col = st.columns([4, 1])
     with info_col:
         st.caption(
@@ -1296,7 +1559,7 @@ elif page == "🔔 Watchlist & Alerts":
             "They are checked when this page loads; no email or push notifications are sent."
         )
     with refresh_col:
-        if st.button("Refresh latest data", key="refresh_watchlist_data"):
+        if st.button("Reload stored data", key="refresh_watchlist_data"):
             get_data.clear()
             get_stock_price_history.clear()
             st.rerun()
@@ -1517,10 +1780,14 @@ elif page == "🔔 Watchlist & Alerts":
                     st.rerun()
 
 # =========================================================
-# PAGE 5: MY PORTFOLIO (CDSL PARSER)
+# PAGE 3: PORTFOLIO PREVIEW
 # =========================================================
-elif page == "📁 My Portfolio":
-    st.title("📁 My Portfolio Dashboard")
+elif page == "Portfolio Preview":
+    st.title("Portfolio Preview")
+    st.info(
+        "This preview finds stock symbols in a CDSL PDF and summarizes their scores. "
+        "It does not yet read quantities, average cost, market value, or gain/loss."
+    )
     
     col1, col2 = st.columns([2, 1])
     with col1:
@@ -1560,7 +1827,8 @@ elif page == "📁 My Portfolio":
                 c2.metric("Good Quality Stocks", good_stocks, delta_color="normal")
                 c3.metric("Poor Quality Stocks", bad_stocks, delta_color="inverse")
 
-                st.markdown("### 🍩 Sector Allocation")
+                st.markdown("### Holdings by sector (count)")
+                st.caption("This counts matching stock symbols; it is not value-based allocation.")
                 sector_counts = port_df["Indian_Sector"].value_counts().reset_index()
                 sector_counts.columns = ["Sector", "Count"]
                 fig_pie = px.pie(sector_counts, names="Sector", values="Count", hole=0.4, color_discrete_sequence=px.colors.qualitative.Pastel)

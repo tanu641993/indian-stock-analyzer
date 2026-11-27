@@ -6,8 +6,8 @@ import pandas as pd
 DB_PATH = os.path.join(os.path.dirname(__file__), "..", "database", "stocks.db")
 
 class ScoringEngine:
-    def __init__(self):
-        self.conn = sqlite3.connect(DB_PATH)
+    def __init__(self, db_path=DB_PATH):
+        self.conn = sqlite3.connect(db_path)
         self.conn.row_factory = sqlite3.Row
 
     def _safe(self, val, default=0):

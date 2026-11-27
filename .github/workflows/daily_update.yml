@@ -29,6 +29,13 @@ jobs:
       - name: Run daily update pipeline
         run: python src/update_daily.py
 
+      - name: Send Telegram score alerts
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python src/telegram_alerts.py
+        continue-on-error: true
+
       - name: Commit and push updated database
         run: |
           git config --global user.name "GitHub Actions Bot"
