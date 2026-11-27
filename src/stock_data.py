@@ -28,7 +28,7 @@ class StockData:
 
     def download_history(self,
                          symbol,
-                         period="5y"):
+                         period="10y"):
         """
         Download stock history from Yahoo Finance
         """

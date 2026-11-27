@@ -7,10 +7,10 @@ import yfinance as yf
 # Stock symbol
 symbol = "COFORGE.NS"
 
-# Download 5 years of data
+# Download 10 years of data
 df = yf.download(
     symbol,
-    period="5y",
+    period="10y",
     auto_adjust=True,
     progress=False
 )

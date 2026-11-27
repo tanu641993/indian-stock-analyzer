@@ -7,6 +7,15 @@ import os
 from datetime import datetime, timedelta
 
 DB_PATH = os.path.join(os.path.dirname(__file__), "..", "database", "stocks.db")
+HISTORY_YEARS = 10
+
+
+def history_start_date(today=None):
+    today = today or datetime.today().date()
+    try:
+        return today.replace(year=today.year - HISTORY_YEARS)
+    except ValueError:
+        return today.replace(year=today.year - HISTORY_YEARS, day=28)
 
 class StockData:
     def __init__(self):
@@ -16,36 +25,64 @@ class StockData:
         # Get list of stocks
         df = pd.read_sql("SELECT symbol FROM stocks", self.conn)
         symbols = df["symbol"].tolist()
+        target_start = history_start_date()
 
         for symbol in symbols:
             try:
-                # 1. Find the last date we have data for this stock
-                query = "SELECT MAX(date) as last_date FROM price_history WHERE symbol = ?"
-                result = pd.read_sql(query, self.conn, params=(symbol,))
-                last_date_str = result.iloc[0]['last_date']
+                query = """
+                    SELECT MIN(date) AS first_date, MAX(date) AS last_date
+                    FROM price_history
+                    WHERE symbol = ?
+                """
+                result = pd.read_sql(query, self.conn, params=(symbol,)).iloc[0]
+                first_date_str = result["first_date"]
+                last_date_str = result["last_date"]
 
                 ticker = yf.Ticker(f"{symbol}.NS")
+                history_frames = []
 
-                if last_date_str:
-                    # We have data. Only download from the day after the last date.
+                if first_date_str:
+                    first_date = datetime.strptime(
+                        str(first_date_str)[:10], "%Y-%m-%d"
+                    ).date()
+                    if first_date > target_start:
+                        print(
+                            f"📥 Backfilling {symbol} from {target_start} "
+                            f"to {first_date}..."
+                        )
+                        df_older = ticker.history(
+                            start=target_start.strftime("%Y-%m-%d"),
+                            end=first_date.strftime("%Y-%m-%d"),
+                            auto_adjust=True,
+                        )
+                        if not df_older.empty:
+                            history_frames.append(df_older)
+
                     last_date = datetime.strptime(str(last_date_str)[:10], "%Y-%m-%d")
-                    start_date = last_date + timedelta(days=1)
-                    
-                    # If the last date is today or yesterday, we are up to date
-                    if start_date.date() >= datetime.today().date():
-                        print(f"⏭️ {symbol} is already up to date.")
-                        continue
-                    
-                    print(f"📥 Fetching new data for {symbol} from {start_date.date()}...")
-                    df_new = ticker.history(start=start_date.strftime("%Y-%m-%d"), auto_adjust=True)
+                    start_date = (last_date + timedelta(days=1)).date()
+                    if start_date < datetime.today().date():
+                        print(f"📥 Fetching new data for {symbol} from {start_date}...")
+                        df_new = ticker.history(
+                            start=start_date.strftime("%Y-%m-%d"),
+                            auto_adjust=True,
+                        )
+                        if not df_new.empty:
+                            history_frames.append(df_new)
                 else:
-                    # No data exists, download 5 years
-                    print(f"📥 Fetching 5Y history for {symbol}...")
-                    df_new = ticker.history(period="5y", auto_adjust=True)
+                    print(f"📥 Fetching {HISTORY_YEARS}Y history for {symbol}...")
+                    df_new = ticker.history(
+                        start=target_start.strftime("%Y-%m-%d"),
+                        auto_adjust=True,
+                    )
+                    if not df_new.empty:
+                        history_frames.append(df_new)
 
-                if df_new.empty:
+                if not history_frames:
                     print(f"⚠️ No new data for {symbol}")
                     continue
+
+                df_new = pd.concat(history_frames)
+                df_new = df_new[~df_new.index.duplicated(keep="last")]
 
                 # 2. Format and save
                 df_new.reset_index(inplace=True)

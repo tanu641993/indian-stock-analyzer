@@ -13,7 +13,7 @@ class DataFetcher:
     def __init__(self):
         pass
 
-    def fetch_historical_prices(self, symbol, period="5y"):
+    def fetch_historical_prices(self, symbol, period="10y"):
         """Fetches historical OHLCV data."""
         # 1. Try bfinance (yfinance drop-in)
         try:
@@ -28,7 +28,7 @@ class DataFetcher:
             # dalal needs start/end dates, we approximate
             from datetime import datetime, timedelta
             end = datetime.now()
-            start = end - timedelta(days=5*365)
+            start = end - timedelta(days=10*365)
             data = dalal.history(symbol, start.strftime('%Y-%m-%d'), end.strftime('%Y-%m-%d'))
             if data:
                 df = pd.DataFrame(data)
@@ -41,7 +41,7 @@ class DataFetcher:
 
         # 3. Try finstack
         try:
-            df = fs.fetch("india_daily_prices", symbol, start="5y", adjust=True)
+            df = fs.fetch("india_daily_prices", symbol, start="10y", adjust=True)
             if not df.empty:
                 # Standardize column names
                 df = df.rename(columns={'date': 'Date', 'open': 'Open', 'high': 'High', 'low': 'Low', 'close': 'Close', 'volume': 'Volume'})
